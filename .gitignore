@@ -1,0 +1,26 @@
+.venv/
+venv/
+venv-ai/
+venv-ml/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+.pytest_cache/
+.mypy_cache/
+
+# Training artifacts and generated outputs
+outputs/
+*.pth
+*.pt
+*.ckpt
+
+# Large or local datasets
+datasets/
+
+# IDE and OS files
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store

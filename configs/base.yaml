@@ -1,0 +1,21 @@
+train:
+  tp_dir: D:/dataset/CASIA2/Tp
+  gt_dir: D:/dataset/CASIA2/CASIA 2 Groundtruth
+  output_dir: outputs
+  image_size: 256
+  batch_size: 4
+  num_workers: 4
+  epochs: 40
+  lr: 0.0001
+  bce_weight: 0.3
+  device: null
+
+predict:
+  weights_path: outputs/best_model.pth
+  input_dir: D:/dataset/CASIA2/Tp
+  output_dir: outputs/predictions
+  image_size: 256
+  num_samples: 5
+  percentile: 95
+  min_area: 300
+  device: null
