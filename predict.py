@@ -1,124 +1,53 @@
-import argparse
+# predict.py
+
 import os
-import random
-from pathlib import Path
-
 import cv2
-import matplotlib.pyplot as plt
 import torch
+import numpy as np
+import matplotlib.pyplot as plt
 
+from models.resnet_unet import ResNetUNet
 from datasets.transforms import get_val_transforms
-from models.unet import UNet
-from utils.config import (
-    add_common_config_arg,
-    get_config_section,
-    load_yaml_config,
-    resolve_setting,
-)
-from utils.postprocess import postprocess_mask
 
 
-def build_parser():
-    parser = argparse.ArgumentParser(
-        description="Run forgery segmentation inference."
-    )
-    add_common_config_arg(parser)
-    parser.add_argument(
-        "--weights-path",
-        dest="weights_path",
-        help="Path to trained model weights.",
-    )
-    parser.add_argument(
-        "--input-dir",
-        dest="input_dir",
-        help="Directory of input images.",
-    )
-    parser.add_argument(
-        "--output-dir",
-        dest="output_dir",
-        help="Directory for saved predictions.",
-    )
-    parser.add_argument(
-        "--image-size",
-        dest="image_size",
-        type=int,
-        help="Resize dimension before inference.",
-    )
-    parser.add_argument(
-        "--num-samples",
-        dest="num_samples",
-        type=int,
-        help="Number of random input images to process.",
-    )
-    parser.add_argument(
-        "--percentile",
-        dest="percentile",
-        type=float,
-        help="Percentile used for adaptive thresholding.",
-    )
-    parser.add_argument(
-        "--min-area",
-        dest="min_area",
-        type=int,
-        help="Minimum connected-component area to keep.",
-    )
-    parser.add_argument(
-        "--device",
-        dest="device",
-        choices=["cpu", "cuda"],
-        help="Force a specific device.",
-    )
-    return parser
+WEIGHTS_PATH = "outputs/best_model.pth"
+IMAGE_PATH = "D:/final year/dataset/CASIA2/Tp/Tp_D_NNN_M_N_sec20047_arc20001_02128.tif"
+GT_DIR = "D:/final year/dataset/CASIA2/CASIA 2 Groundtruth"
+IMAGE_SIZE = 224
+THRESHOLD = 0.5
 
 
-def get_settings():
-    parser = build_parser()
-    args = parser.parse_args()
-    config = load_yaml_config(args.config)
-    predict_config = get_config_section(config, "predict")
-
-    weights_path = resolve_setting(args, predict_config, "weights_path")
-    input_dir = resolve_setting(args, predict_config, "input_dir")
-
-    if weights_path is None or input_dir is None:
-        parser.error(
-            "Missing required inference paths. Provide --weights-path and "
-            "--input-dir, or set them under predict: in a YAML config."
-        )
-
-    return {
-        "weights_path": Path(weights_path),
-        "input_dir": Path(input_dir),
-        "output_dir": Path(
-            resolve_setting(
-                args, predict_config, "output_dir", "outputs/predictions"
-            )
-        ),
-        "image_size": resolve_setting(args, predict_config, "image_size", 256),
-        "num_samples": resolve_setting(args, predict_config, "num_samples", 5),
-        "percentile": resolve_setting(args, predict_config, "percentile", 95),
-        "min_area": resolve_setting(args, predict_config, "min_area", 300),
-        "device": resolve_setting(args, predict_config, "device"),
-    }
-
-
-def load_model(weights_path, device):
-    model = UNet().to(device)
-    model.load_state_dict(
-        torch.load(weights_path, map_location=device, weights_only=True)
-    )
+def load_model(path, device):
+    model = ResNetUNet().to(device)
+    model.load_state_dict(torch.load(path, map_location=device, weights_only=True))
     model.eval()
     return model
 
 
-def read_image(path):
-    image = cv2.imread(str(path), cv2.IMREAD_COLOR)
-    if image is None:
-        raise FileNotFoundError(f"Could not read image: {path}")
-    return cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+def read_gt(image_path):
+    name = os.path.basename(image_path)
+    base = os.path.splitext(name)[0]
+    gt_path = os.path.join(GT_DIR, base + "_gt.png")
+
+    if not os.path.exists(gt_path):
+        return None
+
+    gt = cv2.imread(gt_path, cv2.IMREAD_GRAYSCALE)
+    if gt is None:
+        return None
+    return (gt > 0).astype(np.uint8)
 
 
-def predict_image(model, image, transform, device, percentile, min_area):
+def main():
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+
+    model = load_model(WEIGHTS_PATH, device)
+    transform = get_val_transforms(IMAGE_SIZE)
+
+    image = cv2.imread(IMAGE_PATH)
+    image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+    gt_mask = read_gt(IMAGE_PATH)
+
     augmented = transform(image=image)
     img_tensor = augmented["image"].unsqueeze(0).to(device)
 
@@ -127,66 +56,64 @@ def predict_image(model, image, transform, device, percentile, min_area):
         probs = torch.sigmoid(logits)
 
     prob_map = probs.squeeze().cpu().numpy()
-    bin_mask = postprocess_mask(
-        prob_map,
-        percentile=percentile,
-        min_area=min_area,
-    )
-    return prob_map, bin_mask
+    pred_mask = (prob_map > THRESHOLD).astype("uint8")
 
-
-def main():
-    settings = get_settings()
-    device = settings["device"]
-    if device is None:
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-
-    print("Using device:", device)
-
-    output_dir = settings["output_dir"]
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    model = load_model(settings["weights_path"], device)
-    transform = get_val_transforms(settings["image_size"])
-
-    valid_exts = (".jpg", ".png", ".tif", ".tiff")
-    images = [
-        name for name in os.listdir(settings["input_dir"])
-        if name.lower().endswith(valid_exts)
-    ]
-
-    if len(images) < settings["num_samples"]:
-        raise RuntimeError(
-            f"Only {len(images)} images found, need {settings['num_samples']}"
+    # -------- Metrics --------
+    if gt_mask is not None:
+        # Resize GT to match model output size
+        gt_mask = cv2.resize(
+            gt_mask,
+            (IMAGE_SIZE, IMAGE_SIZE),
+            interpolation=cv2.INTER_NEAREST
         )
+        
+        from utils.metrics import calculate_metrics
+        # Need tensors for calculate_metrics
+        gt_tensor = torch.from_numpy(gt_mask).unsqueeze(0).unsqueeze(0).float().to(device)
+        metrics = calculate_metrics(logits, gt_tensor, threshold=THRESHOLD)
+        
+        print("\nPerformance Indices:")
+        print(f"Accuracy:  {metrics['accuracy']:.4f}")
+        print(f"Precision: {metrics['precision']:.4f}")
+        print(f"Recall:    {metrics['recall']:.4f}")
+        print(f"F1-Score:  {metrics['f1']:.4f}")
+        print(f"AUC Score: {metrics['auc']:.4f}")
+        print(f"IoU Score: {metrics['iou']:.4f}")
+        print("\nConfusion Matrix:")
+        cm = metrics['confusion_matrix']
+        print(f"TP: {cm['tp']} | FP: {cm['fp']}")
+        print(f"FN: {cm['fn']} | TN: {cm['tn']}")
 
-    images = random.sample(images, settings["num_samples"])
-    print(f"Predicting on {len(images)} random images")
+    plt.figure(figsize=(16, 4))
 
-    for name in images:
-        try:
-            img_path = settings["input_dir"] / name
-            image = read_image(img_path)
-            prob_map, bin_mask = predict_image(
-                model,
-                image,
-                transform,
-                device,
-                settings["percentile"],
-                settings["min_area"],
-            )
+    plt.subplot(1, 4, 1)
+    plt.imshow(image)
+    plt.title("Original")
+    plt.axis("off")
 
-            base = Path(name).stem
-            prob_path = output_dir / f"{base}_prob.png"
-            mask_path = output_dir / f"{base}_mask.png"
+    if gt_mask is not None:
+        plt.subplot(1, 4, 2)
+        plt.imshow(gt_mask, cmap="gray")
+        plt.title("Ground Truth")
+        plt.axis("off")
+    else:
+        plt.subplot(1, 4, 2)
+        plt.text(0.5, 0.5, "No GT Found", ha='center', va='center')
+        plt.title("Ground Truth")
+        plt.axis("off")
 
-            plt.imsave(prob_path, prob_map, cmap="jet")
-            cv2.imwrite(str(mask_path), bin_mask)
+    plt.subplot(1, 4, 3)
+    plt.imshow(prob_map, cmap="jet")
+    plt.title("Probability")
+    plt.axis("off")
 
-            print(f"[SAVED] {prob_path}")
-            print(f"[SAVED] {mask_path}")
-        except Exception as error:
-            print(f"[SKIPPED] {name} -> {error}")
+    plt.subplot(1, 4, 4)
+    plt.imshow(pred_mask, cmap="gray")
+    plt.title("Predicted Mask")
+    plt.axis("off")
+
+    plt.tight_layout()
+    plt.show()
 
 
 if __name__ == "__main__":
