@@ -19,6 +19,12 @@ outputs/
 # Large or local datasets
 datasets/
 
+# Generated artifacts
+*.zip
+logs/
+experiments/
+memory/
+
 # IDE and OS files
 .vscode/
 .idea/

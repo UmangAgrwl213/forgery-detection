@@ -1,81 +1,59 @@
-# Forgery Detection
+# Image Forgery Detection (ResNet34-UNet)
 
-## Setup
+A deep learning system for pixel-level image forgery detection, optimized for the CASIA v2 dataset. This project uses a ResNet34-based U-Net architecture to identify and localize splicing and copy-move manipulations.
 
-Windows PowerShell:
+## 🚀 Recent Upgrades
+- **High-Resolution (384x384):** Enhanced vision for fine forensic artifacts.
+- **GPU Acceleration:** Fully configured for CUDA-enabled PyTorch.
+- **Forensic Precision:** Optimized transforms and hybrid loss (Dice-heavy) for better mask alignment.
 
-```powershell
-cd "D:\final year\forgery-detection"
-py -3.12 -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install --upgrade pip
+## 🛠️ Installation
+
+```bash
+# Create environment
+python -m venv .venv
+.\.venv\Scripts\activate
+
+# Install GPU-enabled PyTorch
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
 pip install -r requirements.txt
 ```
 
-If PowerShell blocks activation:
+## 📈 Usage
 
-```powershell
-Set-ExecutionPolicy -Scope Process Bypass
-```
-
-## Configure Paths
-
-Edit [configs/base.yaml](/D:/final%20year/forgery-detection/configs/base.yaml) and set these fields to your dataset location:
-
+### 1. Configure Paths
+Edit `configs/config.yaml` to point to your dataset:
 ```yaml
-train:
-  tp_dir: D:/dataset/CASIA2/Tp
-  gt_dir: D:/dataset/CASIA2/CASIA 2 Groundtruth
-
-predict:
-  input_dir: D:/dataset/CASIA2/Tp
-  weights_path: outputs/best_model.pth
+paths:
+  tp_dir: "D:/dataset/CASIA2/Tp"
+  gt_dir: "D:/dataset/CASIA2/CASIA 2 Groundtruth"
 ```
 
-## Train
-
-Using the config file:
-
-```powershell
-.\.venv\Scripts\python.exe main.py --config configs\base.yaml
+### 2. Train Model
+Run the main training script. It is configured for GPU by default.
+```bash
+python main.py
 ```
 
-Using explicit CLI arguments:
-
-```powershell
-.\.venv\Scripts\python.exe main.py `
-  --tp-dir "D:\dataset\CASIA2\Tp" `
-  --gt-dir "D:\dataset\CASIA2\CASIA 2 Groundtruth" `
-  --output-dir outputs `
-  --image-size 256 `
-  --batch-size 4 `
-  --num-workers 4 `
-  --epochs 40 `
-  --lr 1e-4 `
-  --bce-weight 0.3
+### 3. Generate Forensic Gallery
+After training, generate a 4-panel comparison gallery (Input | GT | Prob Map | Prediction) for your report:
+```bash
+python create_gallery.py
 ```
 
-Best weights are saved to `outputs\best_model.pth` by default.
-
-## Predict
-
-Using the config file:
-
-```powershell
-.\.venv\Scripts\python.exe predict.py --config configs\base.yaml
+### 4. Plot Loss Curves
+```bash
+python plot_losses.py
 ```
 
-Using explicit CLI arguments:
+## ☁️ Cloud Migration (Colab/Kaggle)
+If you need to train for more epochs (e.g., 50+), use the provided preparation script:
+1. Run `python prepare_cloud_zip.py`.
+2. Upload `colab_upload.zip` to Google Drive or Kaggle.
+3. Use the "Smart Setup" code blocks provided during the AI collaboration phase to start cloud training.
 
-```powershell
-.\.venv\Scripts\python.exe predict.py `
-  --weights-path outputs\best_model.pth `
-  --input-dir "D:\dataset\CASIA2\Tp" `
-  --output-dir outputs\predictions `
-  --image-size 256 `
-  --num-samples 5 `
-  --percentile 95 `
-  --min-area 300
-```
-
-Prediction outputs are saved under `outputs\predictions` by default.
+## 📊 Evaluation Metrics
+The system evaluates performance using:
+- **IoU (Intersection over Union)**: Standard for localization.
+- **F1-Score / Dice**: Pixel-wise accuracy.
+- **AUC-ROC**: Model's ability to distinguish between forged and authentic pixels.
