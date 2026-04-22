@@ -1,0 +1,25 @@
+paths:
+  tp_dir: "D:/final year/dataset/CASIA2/Tp"
+  gt_dir: "D:/final year/dataset/CASIA2/CASIA 2 Groundtruth"
+  output_dir: "outputs"
+  colab_tp: "/content/dataset/CASIA2/Tp"
+  colab_gt: "/content/dataset/CASIA2/CASIA 2 Groundtruth"
+
+training:
+  image_size: 384
+  batch_size: 8
+  cloud_batch_size: 64
+  epochs: 30
+  learning_rate: 0.00005
+  num_workers: 4
+
+  subset_train: 1500
+  subset_val: 400
+
+loss:
+  bce_weight: 0.1
+  label_smoothing: 0.1
+
+inference:
+  threshold: 0.5
+  num_samples: 5
