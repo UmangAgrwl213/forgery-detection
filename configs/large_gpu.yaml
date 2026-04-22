@@ -1,6 +1,0 @@
-train:
-  batch_size: 8
-  num_workers: 8
-
-predict:
-  num_samples: 10
