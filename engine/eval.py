@@ -29,8 +29,7 @@ def validate(model, loader, criterion, device):
             loss = criterion(outputs, masks)
 
             total_loss += loss.item()
-            # Disable AUC for speed during validation
-            batch_metrics = calculate_metrics(outputs, masks, compute_auc=False)
+            batch_metrics = calculate_metrics(outputs, masks)
             
             for k in metrics_sum.keys():
                 metrics_sum[k] += batch_metrics[k]

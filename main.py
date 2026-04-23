@@ -190,20 +190,6 @@ def main():
         with open(os.path.join(OUTPUT_DIR, "log.json"), "w") as f:
             json.dump(log_data, f, indent=4)
 
-    # -------- FINAL SUMMARY --------
-    best_idx = log_data["val_loss"].index(min(log_data["val_loss"]))
-    summary = (
-        "📊 --- FINAL TRAINING SUMMARY ---\n"
-        f"Best Epoch: {best_idx + 1}\n"
-        f"Peak IoU:   {max(log_data['val_iou']):.4f}\n"
-        f"Peak F1:    {max(log_data['val_f1']):.4f}\n"
-        f"Final Loss: {log_data['val_loss'][-1]:.4f}\n"
-        "----------------------------------\n"
-    )
-    with open(os.path.join(OUTPUT_DIR, "final_report.txt"), "w") as f:
-        f.write(summary)
-    print("\n" + summary)
-
 
 if __name__ == "__main__":
     main()
