@@ -76,7 +76,18 @@ The project is "Cloud Ready." Use `prepare_cloud_zip.py` to create a clean bundl
 
 ---
 
-## 🔮 Final Steps for Report
+## 🔮 Future Improvements & Research Roadmap
+To further enhance detection accuracy and robustness, the following upgrades are planned:
+
+- **Loss Function Evolution:** Transition to **Focal-Dice Loss** to better handle boundary pixel ambiguity and class imbalance.
+- **Forensic Augmentations:** Integrate **JPEG Compression Simulation** and **Gaussian Noise** into the pipeline to improve robustness against real-world social media compressions.
+- **Attention Mechanisms:** Implement **Squeeze-and-Excitation (SE) blocks** in the UNet decoder to prioritize high-signal forensic features.
+- **Multi-Task Learning:** Add a **Classification Head** to the ResNet encoder to provide global context (Authentic vs. Forged) alongside local segmentation.
+- **Differential Learning Rates:** Apply finer LR control, giving the pretrained encoder a smaller rate than the fresh decoder for more stable convergence.
+
+---
+
+## 🏁 Final Steps for Report
 1.  **Run `python create_gallery.py`** after training to generate comparison visuals.
 2.  **Use `python plot_losses.py`** to generate Loss/IoU curves.
 3.  **Cloud Train:** Perform 50 epochs on Colab/Kaggle for peak F1-scores.

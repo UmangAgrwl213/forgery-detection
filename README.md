@@ -7,6 +7,12 @@ A deep learning system for pixel-level image forgery detection, optimized for th
 - **GPU Acceleration:** Fully configured for CUDA-enabled PyTorch.
 - **Forensic Precision:** Optimized transforms and hybrid loss (Dice-heavy) for better mask alignment.
 
+## 🗺️ Roadmap
+- [ ] **Focal Loss Integration:** Improve boundary detection on hard pixels.
+- [ ] **Attention Modules:** Add SE-Blocks to the decoder for channel-wise feature prioritization.
+- [ ] **Classification Head:** Multi-task learning for reduced false positives.
+- [ ] **Advanced Augmentations:** Add JPEG artifacts and sensor noise simulations.
+
 ## 🛠️ Installation
 
 ```bash
