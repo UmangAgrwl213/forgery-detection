@@ -1,0 +1,6 @@
+model_list:
+  - model_name: claude-3-5-sonnet-20481022  # We spoof the name so Claude Code recognizes it
+    litellm_params:
+      model: nvidia_nim/meta/llama-3.1-70b-instruct  # The actual model from NVIDIA NIM
+      api_key: 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
+      api_base: https://integrate.api.nvidia.com/v1
