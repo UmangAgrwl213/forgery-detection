@@ -6,6 +6,8 @@ A deep learning system for pixel-level image forgery detection, optimized for th
 - **High-Resolution (384x384):** Enhanced vision for fine forensic artifacts.
 - **GPU Acceleration:** Fully configured for CUDA-enabled PyTorch.
 - **Forensic Precision:** Optimized transforms and hybrid loss (Dice-heavy) for better mask alignment.
+- **Enhanced Desktop Application:** Added clipboard support (Ctrl+V) and improved UI
+- **Comprehensive Visualization Tools:** New scripts for detailed forensic analysis
 
 ## 🗺️ Roadmap
 - [ ] **Focal Loss Integration:** Improve boundary detection on hard pixels.
@@ -87,6 +89,27 @@ an image overlay with outlined detected regions, and a three-panel report. Adjus
 the sensitivity with `--threshold 0.4`; remove fewer small detections with
 `--min-area 0`.
 
+### 6. Desktop Application
+Launch the Windows preview with:
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\run_desktop.ps1
+```
+
+Paste an image with Ctrl+V or choose an image file; reports are stored under `outputs/desktop`. 
+The app prefers the source-disjoint CASIA checkpoint with its matching held-out calibration and uses CPU inference by default so it can run during CUDA training. Use `-Weights` to select another checkpoint, `-Device cuda` for CUDA inference, and `-AiWeights` to opt into an experimental AI checkpoint. When calibration is absent or does not match the checkpoint, results are labeled unsure.
+
+### 7. Comprehensive Visualization
+For detailed forensic analysis with all components together:
+```bash
+python simple_comprehensive_demo.py
+```
+
+This creates a comprehensive visualization showing:
+- Original image
+- Probability heatmap (blue = low probability, red = high probability)
+- Binary mask (white = detected forgery regions)
+- Detection overlay (red highlights for detected forgeries)
+
 ## Dataset layout
 
 The supplied archive is extracted into this layout:
@@ -113,3 +136,8 @@ The system evaluates performance using:
 - **IoU (Intersection over Union)**: Standard for localization.
 - **F1-Score / Dice**: Pixel-wise accuracy.
 - **AUC-ROC**: Model's ability to distinguish between forged and authentic pixels.
+
+## 📊 Benchmark Results
+Tampering inference now surfaces the low-false-alarm validation cutoff when the held-out report matches the checkpoint hash, input size, and pixel threshold. The image decision uses model-resolution mask area, consistent with benchmark scoring. This calibrates the image-level decision only; pixel heatmap scores remain uncalibrated. Older checkpoints produce an explicitly uncalibrated report.
+
+The source-disjoint checkpoint's validation-selected low-false-alarm operating point measured a 1.08% authentic false-positive rate and 52.49% tampered recall on its 1,496-image CASIA test split (12/1,115 authentic images flagged). This is an evaluation estimate, not a guarantee on other datasets or individual images.
