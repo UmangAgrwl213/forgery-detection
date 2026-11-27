@@ -55,9 +55,11 @@ The frozen `outputs/benchmarks/casia-source-v1.json` manifest uses CASIA's filen
 
 Desktop smoke test passed on Windows with the epoch-28 tampering checkpoint and the low-FPR AI pilot. The image-selection action loaded the synthetic copy-move fixture, displayed the saved overlay report, and showed the AI abstention. This checks the workflow. Detection quality still needs a labeled app test set and a qualified AI checkpoint.
 
-Launch the Windows preview with `powershell -NoProfile -ExecutionPolicy Bypass -File .\run_desktop.ps1`. The launcher prefers the completed development checkpoint when present and uses CPU inference by default so it can run during CUDA training. Use `-Weights` to select another checkpoint, `-Device cuda` for CUDA inference, and `-AiWeights` to opt into an experimental AI checkpoint. Reports are stored under `outputs/desktop`.
+Launch the Windows preview with `powershell -NoProfile -ExecutionPolicy Bypass -File .\run_desktop.ps1`. Paste an image with Ctrl+V or choose an image file; reports are stored under `outputs/desktop`. The app prefers the source-disjoint CASIA checkpoint with its matching held-out calibration and uses CPU inference by default so it can run during CUDA training. Use `-Weights` to select another checkpoint, `-Device cuda` for CUDA inference, and `-AiWeights` to opt into an experimental AI checkpoint. When calibration is absent or does not match the checkpoint, results are labeled unsure.
 
-Tampering inference now surfaces the low-false-alarm validation cutoff when the held-out report matches the checkpoint hash, input size, and pixel threshold. The image decision uses model-resolution mask area, consistent with benchmark scoring. The display overlay may use an upsampled and filtered mask. Older checkpoints produce an explicitly uncalibrated report.
+Tampering inference now surfaces the low-false-alarm validation cutoff when the held-out report matches the checkpoint hash, input size, and pixel threshold. The image decision uses model-resolution mask area, consistent with benchmark scoring. The display overlay may use an upsampled and filtered mask. This calibrates the image-level decision only; pixel heatmap scores remain uncalibrated. Older checkpoints produce an explicitly uncalibrated report.
+
+The source-disjoint checkpoint's validation-selected low-false-alarm operating point measured a 1.08% authentic false-positive rate and 52.49% tampered recall on its 1,496-image CASIA test split (12/1,115 authentic images flagged). This is an evaluation estimate, not a guarantee on other datasets or individual images.
 
 ## AI-generated image baseline
 

@@ -5,14 +5,13 @@ import os
 def zip_project(output_filename="colab_upload.zip"):
     # 1. CORE CODE DIRECTORIES
     code_items = [
-        'app_api', 'configs', 'datasets', 'engine', 'losses', 
-        'metrics', 'models', 'utils', 'main.py', 'create_gallery.py', 
+        'configs', 'data', 'engine', 'losses',
+        'models', 'utils', 'main.py', 'create_gallery.py',
         'plot_losses.py', 'predict.py', 'requirements.txt'
     ]
     
     # 2. DATASET DIRECTORY
-    # Looking for 'dataset' in the parent directory as per your structure
-    dataset_dir = os.path.abspath(os.path.join(os.getcwd(), "..", "dataset"))
+    dataset_dir = os.path.abspath(os.path.join(os.getcwd(), "dataset"))
     
     exclude_ext = ['.pyc', '.pth', '.json', '.sh']
     exclude_dir = ['__pycache__', 'outputs', 'logs', '.git', '.venv']
@@ -43,9 +42,8 @@ def zip_project(output_filename="colab_upload.zip"):
                 for file in files:
                     if file.lower().endswith(('.jpg', '.png', '.tif')):
                         file_path = os.path.join(root, file)
-                        # Relative path from the parent of 'dataset'
-                        rel_path = os.path.relpath(file_path, os.path.join(dataset_dir, ".."))
-                        zipf.write(file_path, arcname=rel_path)
+                        rel_path = os.path.relpath(file_path, os.getcwd())
+                        zipf.write(file_path, arcname=os.path.join("forgery-detection", rel_path))
                         count += 1
             print(f"✅ Dataset added ({count} images).")
         else:

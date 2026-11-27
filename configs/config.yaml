@@ -1,13 +1,14 @@
 paths:
-  # Relative paths make the project portable after cloning or moving it.
   tp_dir: "dataset/CASIA2/Tp"
   gt_dir: "dataset/CASIA2/CASIA 2 Groundtruth"
   output_dir: "outputs"
+  colab_tp: "/content/forgery-detection/dataset/CASIA2/Tp"
+  colab_gt: "/content/forgery-detection/dataset/CASIA2/CASIA 2 Groundtruth"
 
 training:
   image_size: 384
-  # Tuned for the RTX 5070 Ti (16 GB). Lower to 12 or 8 only if an OOM occurs.
   batch_size: 16
+  cloud_batch_size: 64
   epochs: 5
   learning_rate: 0.00005
   pretrained_encoder: true
@@ -18,12 +19,10 @@ training:
   subset_val: 400
 
 accelerator:
-  # CUDA is used for training and normal inference. The Intel NPU is export-only inference.
   device: "cuda"
   amp_dtype: "float16"
   allow_tf32: true
   cudnn_benchmark: true
-  # PyTorch 2.14's Windows compiler backend currently fails to import a kernel module.
   compile_model: false
 
 loss:

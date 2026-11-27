@@ -49,7 +49,7 @@ def make_random_split(paths, train_cfg, full_dataset, forensic_augmentations=Fal
     total = len(train_data)
     indices = torch.randperm(total).tolist()
     train_limit, val_limit = train_cfg.get("subset_train"), train_cfg.get("subset_val")
-    if full_dataset or (train_limit is None and val_limit is None):
+    if full_dataset or (train_limit in (None, -1) and val_limit in (None, -1)):
         train_limit = int(total * 0.8)
         val_limit = total - train_limit
     else:

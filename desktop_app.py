@@ -12,7 +12,42 @@ from pathlib import Path
 from tkinter import filedialog, ttk
 from uuid import uuid4
 
-from PIL import Image, ImageTk
+from PIL import Image, ImageGrab, ImageTk
+
+
+IMAGE_EXTENSIONS = {".bmp", ".jpeg", ".jpg", ".png", ".tif", ".tiff", ".webp"}
+
+
+def prepare_clipboard_image(output, clipboard_data):
+    if isinstance(clipboard_data, Image.Image):
+        output.mkdir(parents=True, exist_ok=True)
+        image_path = output / "pasted_image.png"
+        clipboard_data.convert("RGB").save(image_path, format="PNG")
+        return image_path
+    if isinstance(clipboard_data, list):
+        for item in clipboard_data:
+            if not isinstance(item, str):
+                continue
+            image_path = Path(item)
+            if image_path.is_file() and image_path.suffix.lower() in IMAGE_EXTENSIONS:
+                return image_path
+    return None
+
+
+def format_tampering_assessment(summary):
+    area = summary["forged_area_percent"]
+    assessment = summary.get("tampering_assessment", {})
+    decision = assessment.get("decision", "uncalibrated")
+    if decision == "signal_detected":
+        return (f"Tampering assessment: calibrated signal detected · {area:.3f}% highlighted. "
+                "Pixel scores are uncalibrated; this is not proof of manipulation.")
+    if decision == "no_signal_detected":
+        return (f"Tampering assessment: no calibrated signal detected · {area:.3f}% highlighted. "
+                "Pixel scores are uncalibrated; this is not proof of authenticity.")
+    if decision == "inconclusive":
+        return f"Tampering assessment: inconclusive · {area:.3f}% highlighted. Pixel scores are uncalibrated."
+    return (f"Tampering assessment: UNSURE (uncalibrated) · {area:.3f}% highlighted. "
+            "The highlighted area is not a calibrated confidence score.")
 
 
 def analyze(image, weights, output, device="auto"):
@@ -25,7 +60,9 @@ def analyze(image, weights, output, device="auto"):
     )
     if result.returncode:
         raise RuntimeError(result.stderr.strip().splitlines()[-1] if result.stderr.strip() else "Prediction failed")
-    return output / f"{image.stem}_forgery_report.png", result.stdout.strip().splitlines()[-1]
+    report = output / f"{image.stem}_forgery_report.png"
+    summary = json.loads(report.with_suffix(".json").read_text(encoding="utf-8"))
+    return report, format_tampering_assessment(summary)
 
 
 def save_app_assessment(report, tampering_weights, ai_assessment):
@@ -40,7 +77,10 @@ def save_app_assessment(report, tampering_weights, ai_assessment):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--weights", type=Path, default=Path("outputs/best_model.pth"))
+    default_weights = Path("outputs/casia-source-v2-20261127-183558/best_model.pth")
+    if not default_weights.is_file() or not default_weights.with_name("heldout_eval.json").is_file():
+        default_weights = Path("outputs/best_model.pth")
+    parser.add_argument("--weights", type=Path, default=default_weights)
     parser.add_argument("--ai-weights", type=Path)
     parser.add_argument("--device", choices=("auto", "cuda", "cpu"), default="auto")
     args = parser.parse_args()
@@ -61,9 +101,10 @@ def main():
     ai_status = tk.StringVar(value="AI-generated image detection: unavailable" if args.ai_weights is None
                              else f"AI model: {args.ai_weights.parent.name}/{args.ai_weights.name}")
     ttk.Label(frame, textvariable=ai_status).pack(anchor="w")
-    status = tk.StringVar(value="Choose an image to inspect for likely edited regions.")
+    status = tk.StringVar(value="Paste an image with Ctrl+V, or choose an image to inspect.")
     preview = ttk.Label(frame, anchor="center")
     results = queue.Queue()
+    buttons = []
 
     def poll():
         try:
@@ -81,15 +122,12 @@ def main():
             status.set(message)
         if ai_message:
             ai_status.set(ai_message)
-        button.state(["!disabled"])
+        for button in buttons:
+            button.state(["!disabled"])
 
-    def pick():
-        selected = filedialog.askopenfilename(filetypes=[("Images", "*.png *.jpg *.jpeg *.tif *.tiff *.bmp *.webp"), ("All files", "*.*")])
-        if not selected:
-            return
-        image = Path(selected)
-        output = Path(__file__).resolve().parent / "outputs" / "desktop" / uuid4().hex
-        button.state(["disabled"])
+    def run_analysis(image, output):
+        for button in buttons:
+            button.state(["disabled"])
         preview.configure(image="")
         status.set(f"Analyzing {image.name}…")
         if args.ai_weights:
@@ -129,8 +167,43 @@ def main():
         threading.Thread(target=worker, daemon=True).start()
         root.after(150, poll)
 
-    button = ttk.Button(frame, text="Choose image", command=pick)
-    button.pack(anchor="w", pady=12)
+    def pick():
+        selected = filedialog.askopenfilename(filetypes=[("Images", "*.png *.jpg *.jpeg *.tif *.tiff *.bmp *.webp"), ("All files", "*.*")])
+        if selected:
+            output = Path(__file__).resolve().parent / "outputs" / "desktop" / uuid4().hex
+            run_analysis(Path(selected), output)
+
+    def paste():
+        if any(button.instate(["disabled"]) for button in buttons):
+            return
+        try:
+            clipboard_data = ImageGrab.grabclipboard()
+        except (OSError, tk.TclError) as error:
+            status.set(f"Could not read the clipboard: {error}")
+            return
+        if clipboard_data is None:
+            status.set("No image found in the clipboard. Copy an image, or choose an image file.")
+            return
+        output = Path(__file__).resolve().parent / "outputs" / "desktop" / uuid4().hex
+        try:
+            image = prepare_clipboard_image(output, clipboard_data)
+        except (OSError, ValueError) as error:
+            status.set(f"Could not use the clipboard image: {error}")
+            return
+        if image is None:
+            status.set("No supported image found in the clipboard. Copy an image, or choose an image file.")
+            return
+        run_analysis(image, output)
+
+    button_frame = ttk.Frame(frame)
+    button_frame.pack(anchor="w", pady=12)
+    choose_button = ttk.Button(button_frame, text="Choose image", command=pick)
+    choose_button.pack(side="left", padx=(0, 8))
+    paste_button = ttk.Button(button_frame, text="Paste image (Ctrl+V)", command=paste)
+    paste_button.pack(side="left")
+    buttons.extend((choose_button, paste_button))
+    root.bind("<Control-v>", lambda _event: paste())
+    root.bind("<Control-V>", lambda _event: paste())
     ttk.Label(frame, textvariable=status, wraplength=1020).pack(anchor="w")
     preview.pack(fill="both", expand=True)
     root.mainloop()
