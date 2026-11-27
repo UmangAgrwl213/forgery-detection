@@ -61,13 +61,41 @@ def save_training_plots(log_file, output_file=None, show=False):
     return output_file
 
 
+def save_ai_training_plot(log_file, output_file=None):
+    """Plot AI training loss and the trade-off at the validation cutoff."""
+    log_file = Path(log_file)
+    rows = [json.loads(line) for line in log_file.read_text(encoding="utf-8").splitlines() if line.strip()]
+    if not rows:
+        raise ValueError("No completed AI training epochs")
+    epochs = [row["epoch"] for row in rows]
+    figure, (loss_ax, score_ax) = plt.subplots(1, 2, figsize=(13, 5))
+    loss_ax.plot(epochs, [row["train_loss"] for row in rows], marker="o")
+    loss_ax.set(xlabel="Epoch", ylabel="Loss", title="AI detector training loss", xticks=epochs)
+    for field, label in (("roc_auc", "ROC-AUC"), ("balanced_accuracy", "Balanced accuracy"),
+                         ("generated_recall", "Generated recall"), ("authentic_false_positive_rate", "Authentic false alarms")):
+        score_ax.plot(epochs, [row[field] for row in rows], marker="o", label=label)
+    score_ax.set(xlabel="Epoch", ylabel="Score", title="AI detector validation", ylim=(0, 1), xticks=epochs)
+    score_ax.legend()
+    for axis in (loss_ax, score_ax):
+        axis.grid(alpha=0.3)
+    output = Path(output_file or log_file.with_name("training_curves.png"))
+    output.parent.mkdir(parents=True, exist_ok=True)
+    figure.savefig(output, dpi=180, bbox_inches="tight")
+    plt.close(figure)
+    print(f"Saved training curves: {output}")
+    return output
+
+
 def main():
     parser = argparse.ArgumentParser(description="Plot saved forgery-model training curves.")
     parser.add_argument("--log", default="outputs/log.json", help="Path to training log JSON")
     parser.add_argument("--output", default=None, help="PNG output path (default: next to log)")
     parser.add_argument("--show", action="store_true", help="Also open an interactive plot window")
     args = parser.parse_args()
-    save_training_plots(args.log, args.output, args.show)
+    if Path(args.log).suffix.lower() == ".jsonl":
+        save_ai_training_plot(args.log, args.output)
+    else:
+        save_training_plots(args.log, args.output, args.show)
 
 
 if __name__ == "__main__":
