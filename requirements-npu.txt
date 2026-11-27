@@ -1,0 +1,4 @@
+# Optional Intel NPU inference/export support. Install after the CUDA environment.
+-r requirements.txt
+onnx>=1.16,<2
+openvino>=2025.0,<2027

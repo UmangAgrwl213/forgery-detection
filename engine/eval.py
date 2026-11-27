@@ -5,7 +5,7 @@ from tqdm import tqdm
 from utils.metrics import calculate_metrics
 
 
-def validate(model, loader, criterion, device):
+def validate(model, loader, criterion, device, autocast_dtype=torch.float16):
     model.eval()
 
     total_loss = 0.0
@@ -25,8 +25,9 @@ def validate(model, loader, criterion, device):
             images = images.to(device, non_blocking=True)
             masks = masks.to(device, non_blocking=True)
 
-            outputs = model(images)
-            loss = criterion(outputs, masks)
+            with torch.amp.autocast(device_type=device.type, dtype=autocast_dtype, enabled=device.type == "cuda"):
+                outputs = model(images)
+                loss = criterion(outputs, masks)
 
             total_loss += loss.item()
             batch_metrics = calculate_metrics(outputs, masks)

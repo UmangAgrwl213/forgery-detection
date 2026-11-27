@@ -1,17 +1,28 @@
 paths:
-  tp_dir: "D:/final year/dataset/CASIA2/Tp"
-  gt_dir: "D:/final year/dataset/CASIA2/CASIA 2 Groundtruth"
+  # Relative paths make the project portable after cloning or moving it.
+  tp_dir: "dataset/CASIA2/Tp"
+  gt_dir: "dataset/CASIA2/CASIA 2 Groundtruth"
   output_dir: "outputs"
 
 training:
   image_size: 384
-  batch_size: 8
+  # Tuned for the RTX 5070 Ti (16 GB). Lower to 12 or 8 only if an OOM occurs.
+  batch_size: 16
   epochs: 5
   learning_rate: 0.00005
-  num_workers: 4
+  num_workers: 8
+  prefetch_factor: 4
 
   subset_train: 1500
   subset_val: 400
+
+accelerator:
+  # CUDA is used for training and normal inference. The Intel NPU is export-only inference.
+  device: "cuda"
+  amp_dtype: "float16"
+  allow_tf32: true
+  cudnn_benchmark: true
+  compile_model: true
 
 loss:
   bce_weight: 0.1
