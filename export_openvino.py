@@ -28,9 +28,8 @@ def main():
     output_dir.mkdir(parents=True, exist_ok=True)
     image_size = config["training"]["image_size"]
 
-    model = ResNetUNet(pretrained=False).cpu().eval()
     state = torch.load(weights, map_location="cpu", weights_only=True)
-    model.load_state_dict({key.removeprefix("_orig_mod."): value for key, value in state.items()})
+    model = ResNetUNet.from_state_dict(state).eval()
     onnx_path = output_dir / "forgery_segmentation.onnx"
     sample = torch.randn(1, 3, image_size, image_size)
     torch.onnx.export(model, sample, onnx_path, input_names=["image"], output_names=["logits"], opset_version=17)
