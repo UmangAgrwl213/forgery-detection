@@ -10,6 +10,7 @@ training:
   batch_size: 16
   epochs: 5
   learning_rate: 0.00005
+  pretrained_encoder: true
   num_workers: 8
   prefetch_factor: 4
 
@@ -22,7 +23,8 @@ accelerator:
   amp_dtype: "float16"
   allow_tf32: true
   cudnn_benchmark: true
-  compile_model: true
+  # PyTorch 2.14's Windows compiler backend currently fails to import a kernel module.
+  compile_model: false
 
 loss:
   bce_weight: 0.1

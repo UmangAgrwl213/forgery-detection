@@ -2,14 +2,27 @@ import torch
 import torch.nn as nn
 import torchvision.models as models
 
+
+class SqueezeExcitation(nn.Module):
+    def __init__(self, channels):
+        super().__init__()
+        hidden = max(1, channels // 16)
+        self.gate = nn.Sequential(nn.AdaptiveAvgPool2d(1), nn.Conv2d(channels, hidden, 1),
+                                  nn.ReLU(inplace=True), nn.Conv2d(hidden, channels, 1), nn.Sigmoid())
+
+    def forward(self, features):
+        return features * self.gate(features)
+
+
 class DecoderBlock(nn.Module):
-    def __init__(self, in_channels, skip_channels, out_channels):
+    def __init__(self, in_channels, skip_channels, out_channels, attention=False):
         super().__init__()
         self.conv1 = nn.Conv2d(in_channels + skip_channels, out_channels, kernel_size=3, padding=1)
         self.bn1 = nn.BatchNorm2d(out_channels)
         self.relu = nn.ReLU(inplace=True)
         self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1)
         self.bn2 = nn.BatchNorm2d(out_channels)
+        self.attention = SqueezeExcitation(out_channels) if attention else nn.Identity()
 
     def forward(self, x, skip=None):
         x = torch.nn.functional.interpolate(x, scale_factor=2, mode='bilinear', align_corners=True)
@@ -17,13 +30,14 @@ class DecoderBlock(nn.Module):
             x = torch.cat([x, skip], dim=1)
         x = self.relu(self.bn1(self.conv1(x)))
         x = self.relu(self.bn2(self.conv2(x)))
-        return x
+        return self.attention(x)
 
 class ResNetUNet(nn.Module):
-    def __init__(self, n_class=1):
+    def __init__(self, n_class=1, pretrained=True, attention=False):
         super().__init__()
 
-        self.base_model = models.resnet34(weights=models.ResNet34_Weights.IMAGENET1K_V1)
+        weights = models.ResNet34_Weights.IMAGENET1K_V1 if pretrained else None
+        self.base_model = models.resnet34(weights=weights)
         self.base_layers = list(self.base_model.children())
 
         self.layer0 = nn.Sequential(*self.base_layers[:3]) # size=(N, 64, x.H/2, x.W/2)
@@ -33,13 +47,21 @@ class ResNetUNet(nn.Module):
         self.layer3 = nn.Sequential(*self.base_layers[6]) # size=(N, 256, x.H/16, x.W/16)
         self.layer4 = nn.Sequential(*self.base_layers[7]) # size=(N, 512, x.H/32, x.W/32)
 
-        self.decode4 = DecoderBlock(512, 256, 256)
-        self.decode3 = DecoderBlock(256, 128, 128)
-        self.decode2 = DecoderBlock(128, 64, 64)
-        self.decode1 = DecoderBlock(64, 64, 64)
-        self.decode0 = DecoderBlock(64, 0, 32)
+        self.decode4 = DecoderBlock(512, 256, 256, attention)
+        self.decode3 = DecoderBlock(256, 128, 128, attention)
+        self.decode2 = DecoderBlock(128, 64, 64, attention)
+        self.decode1 = DecoderBlock(64, 64, 64, attention)
+        self.decode0 = DecoderBlock(64, 0, 32, attention)
 
         self.final_conv = nn.Conv2d(32, n_class, kernel_size=1)
+
+    @classmethod
+    def from_state_dict(cls, state):
+        state = {key.removeprefix("_orig_mod."): value for key, value in state.items()}
+        model = cls(n_class=state["final_conv.weight"].shape[0], pretrained=False,
+                    attention=any(".attention.gate." in key for key in state))
+        model.load_state_dict(state)
+        return model
 
     def forward(self, input):
         e0 = self.layer0(input)    # 112x112, 64

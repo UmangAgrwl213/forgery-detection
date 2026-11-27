@@ -2,7 +2,15 @@
 
 import argparse
 import json
+import os
 from pathlib import Path
+
+# Avoid a protected user-profile cache when training in a managed environment.
+os.environ.setdefault("MPLCONFIGDIR", str(Path("outputs") / ".matplotlib"))
+import matplotlib
+
+# Training can run without an interactive desktop/Tcl installation.
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 def save_training_plots(log_file, output_file=None, show=False):
@@ -28,14 +36,19 @@ def save_training_plots(log_file, output_file=None, show=False):
     loss_ax.grid(alpha=0.3)
     loss_ax.legend()
 
-    metric_keys = {"val_iou": "IoU", "val_f1": "F1", "val_precision": "Precision", "val_recall": "Recall"}
+    if logs.get("val_positive_mask_f1"):
+        metric_keys = {"val_positive_mask_f1": "Positive-mask F1", "val_positive_mask_iou": "Positive-mask IoU",
+                       "val_empty_target_mean_predicted_area": "Highlighted area on empty masks"}
+    else:
+        metric_keys = {"val_iou": "IoU", "val_f1": "F1", "val_precision": "Precision", "val_recall": "Recall"}
     for key, label in metric_keys.items():
         values = logs.get(key, [])
         if values:
             metric_ax.plot(range(1, len(values) + 1), values, marker="o", label=label)
     metric_ax.set(xlabel="Epoch", ylabel="Score", ylim=(0, 1), title="Validation localization metrics")
     metric_ax.grid(alpha=0.3)
-    metric_ax.legend()
+    if metric_ax.lines:
+        metric_ax.legend()
     figure.tight_layout()
 
     output_file = Path(output_file or log_file.with_name("training_curves.png"))
