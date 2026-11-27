@@ -1,194 +1,175 @@
-# main.py
+"""Train the forgery-localization model with CUDA-aware defaults."""
 
 import os
+
+# Windows DataLoader workers each import NumPy/scikit-learn. Limit their BLAS pools
+# so eight workers do not exhaust RAM or native-thread resources during validation.
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+os.environ.setdefault("MKL_NUM_THREADS", "1")
+os.environ.setdefault("NUMEXPR_NUM_THREADS", "1")
+
+import argparse
+import hashlib
 import json
+import shutil
+from datetime import datetime
+from pathlib import Path
+
 import torch
 import torch.optim as optim
 from torch.utils.data import DataLoader, Subset
 
-from datasets.casia import CASIADataset
-from datasets.transforms import get_train_transforms, get_val_transforms
-from models.resnet_unet import ResNetUNet
-from losses.hybrid import BCEDiceLoss
-from engine.train import train_one_epoch
+from data.casia import CASIADataset, read_split_manifest
+from data.transforms import get_train_transforms, get_val_transforms
 from engine.eval import validate
+from engine.train import train_one_epoch
+from losses.hybrid import BCEDiceLoss, FocalDiceLoss
+from models.resnet_unet import ResNetUNet
+from plot_losses import save_training_plots
 from utils.config import load_yaml_config
+from utils.runtime import amp_dtype, configure_accelerator
+
+
+def make_loader(dataset, batch_size, shuffle, workers, prefetch_factor, pin_memory):
+    options = {
+        "batch_size": batch_size, "shuffle": shuffle, "num_workers": workers,
+        "pin_memory": pin_memory, "persistent_workers": workers > 0,
+    }
+    if workers > 0:
+        options["prefetch_factor"] = prefetch_factor
+    return DataLoader(dataset, **options)
+
+
+def make_random_split(paths, train_cfg, full_dataset, forensic_augmentations=False):
+    image_size = train_cfg["image_size"]
+    images, masks = paths["tp_dir"], paths["gt_dir"]
+    train_data = CASIADataset(images, masks, get_train_transforms(image_size, forensic=forensic_augmentations))
+    val_data = CASIADataset(images, masks, get_val_transforms(image_size))
+    total = len(train_data)
+    indices = torch.randperm(total).tolist()
+    train_limit, val_limit = train_cfg.get("subset_train"), train_cfg.get("subset_val")
+    if full_dataset or (train_limit in (None, -1) and val_limit in (None, -1)):
+        train_limit = int(total * 0.8)
+        val_limit = total - train_limit
+    else:
+        val_limit = min(val_limit or int(total * 0.2), total - 1)
+        train_limit = min(train_limit or total - val_limit, total - val_limit)
+    if min(train_limit, val_limit) <= 0:
+        raise ValueError("Training and validation splits must be nonempty")
+    return Subset(train_data, indices[:train_limit]), Subset(val_data, indices[train_limit:train_limit + val_limit]), total
 
 
 def main():
-    torch.backends.cudnn.benchmark = True
-
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--epochs", type=int)
+    parser.add_argument("--image-size", type=int, help="Square model input in pixels, divisible by 32.")
+    parser.add_argument("--batch-size", type=int)
+    parser.add_argument("--loss", choices=("bce-dice", "focal-dice"), default="bce-dice")
+    parser.add_argument("--attention", action="store_true", help="Enable decoder squeeze-and-excitation")
+    parser.add_argument("--forensic-augmentations", action="store_true", help="Apply training-only JPEG and sensor-like noise")
+    parser.add_argument("--output-dir")
+    split_options = parser.add_mutually_exclusive_group()
+    split_options.add_argument("--full-dataset", action="store_true", help="Use an 80/20 split of all matched pairs.")
+    split_options.add_argument("--split-manifest", type=Path, help="Train and validate on frozen CASIA partitions.")
+    parser.add_argument("--seed", type=int)
+    args = parser.parse_args()
+    if args.epochs is not None and args.epochs < 1:
+        parser.error("--epochs must be positive")
+    if args.seed is not None:
+        torch.manual_seed(args.seed)
     config = load_yaml_config("configs/config.yaml")
+    paths, train_cfg, loss_cfg = config["paths"], config["training"], config["loss"]
+    if args.image_size is not None:
+        train_cfg["image_size"] = args.image_size
+    if args.batch_size is not None:
+        train_cfg["batch_size"] = args.batch_size
+    if train_cfg["image_size"] < 32 or train_cfg["image_size"] % 32:
+        parser.error("Image size must be a positive multiple of 32")
+    if train_cfg["batch_size"] < 1:
+        parser.error("Batch size must be positive")
+    accelerator_cfg = config.get("accelerator", {})
+    output_dir = args.output_dir or paths["output_dir"]
+    os.makedirs(output_dir, exist_ok=True)
 
-    paths = config["paths"]
-    train_cfg = config["training"]
-    loss_cfg = config["loss"]
+    if args.split_manifest:
+        manifest = read_split_manifest(args.split_manifest)
+        run_path = Path(output_dir)
+        if (run_path / "best_model.pth").exists() or (run_path / "log.json").exists():
+            parser.error("Choose a fresh --output-dir for a manifest-based run")
+        with (run_path / "run_metadata.json").open("x", encoding="utf-8") as file:
+            json.dump({"split_sha256": hashlib.sha256(args.split_manifest.read_bytes()).hexdigest(),
+                       "image_size": train_cfg["image_size"], "batch_size": train_cfg["batch_size"], "seed": args.seed,
+                       "epochs": args.epochs or train_cfg["epochs"], "loss": args.loss,
+                       "decoder_attention": args.attention, "forensic_augmentations": args.forensic_augmentations}, file, indent=2)
+    # Keep framework caches inside the project instead of protected user-profile folders.
+    torch_cache = os.path.abspath(os.path.join(paths["output_dir"], "torch_cache"))
+    os.makedirs(torch_cache, exist_ok=True)
+    torch.hub.set_dir(torch_cache)
 
-    TP_DIR = paths["tp_dir"]
-    GT_DIR = paths["gt_dir"]
-    OUTPUT_DIR = paths["output_dir"]
+    best_path = os.path.join(output_dir, "best_model.pth")
+    if os.path.exists(best_path):
+        backup = os.path.join(output_dir, f"best_model_prev_{datetime.now():%Y%m%d_%H%M%S}.pth")
+        shutil.copy2(best_path, backup)
+        print(f"Previous best model backed up to: {backup}")
 
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
-    
-    # -------- BACKUP PREVIOUS MODEL --------
-    best_model_path = os.path.join(OUTPUT_DIR, "best_model.pth")
-    if os.path.exists(best_model_path):
-        import shutil
-        from datetime import datetime
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        backup_path = os.path.join(OUTPUT_DIR, f"best_model_prev_{timestamp}.pth")
-        shutil.copy2(best_model_path, backup_path)
-        print(f"📦 Previous best model backed up to: {backup_path}")
-
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    print("Using device:", device)
-
+    device = configure_accelerator(accelerator_cfg)
+    precision = amp_dtype(accelerator_cfg.get("amp_dtype", "float16"))
     image_size = train_cfg["image_size"]
-
-    # -------- DATA --------
-    full_dataset = CASIADataset(
-        TP_DIR, GT_DIR, transform=None # No transforms yet
-    )
-
-    total_size = len(full_dataset)
-    train_limit = train_cfg.get("subset_train", total_size)
-    val_limit = train_cfg.get("subset_val", total_size)
-
-    # Shuffle indices for a fair split
-    indices = torch.randperm(total_size).tolist()
-
-    # Define split points
-    # We'll take subset_train for training and subset_val for validation, ensuring they are disjoint
-    train_indices = indices[:min(train_limit, total_size - val_limit)]
-    val_indices = indices[len(train_indices):len(train_indices) + val_limit]
-
-    # If the user didn't specify limits, or they overlap, we should handle it more robustly
-    if not train_cfg.get("subset_train") and not train_cfg.get("subset_val"):
-        # Default to 80/20 split
-        train_split = int(0.8 * total_size)
-        train_indices = indices[:train_split]
-        val_indices = indices[train_split:]
-
-    train_dataset = Subset(
-        CASIADataset(TP_DIR, GT_DIR, get_train_transforms(image_size)),
-        train_indices
-    )
-    val_dataset = Subset(
-        CASIADataset(TP_DIR, GT_DIR, get_val_transforms(image_size)),
-        val_indices
-    )
-
+    if args.split_manifest:
+        root = Path(paths["tp_dir"]).parent
+        train_transform = get_train_transforms(image_size, forensic=args.forensic_augmentations)
+        train_dataset = CASIADataset(root, paths["gt_dir"], train_transform, records=manifest["train"])
+        val_dataset = CASIADataset(root, paths["gt_dir"], get_val_transforms(image_size), records=manifest["validation"])
+        total_size = sum(map(len, manifest.values()))
+    else:
+        train_dataset, val_dataset, total_size = make_random_split(paths, train_cfg, args.full_dataset, args.forensic_augmentations)
     print(f"Dataset: Total={total_size}, Train={len(train_dataset)}, Val={len(val_dataset)}")
+    workers = train_cfg.get("num_workers", 0)
+    batch_size = train_cfg["batch_size"]
+    prefetch_factor = train_cfg.get("prefetch_factor", 2)
+    pin_memory = device.type == "cuda"
+    train_loader = make_loader(train_dataset, batch_size, True, workers, prefetch_factor, pin_memory)
+    val_loader = make_loader(val_dataset, batch_size, False, workers, prefetch_factor, pin_memory)
 
-    # -------- LOADERS --------
-    # Added persistent_workers=True to keep processes alive between epochs
-    train_loader = DataLoader(
-        train_dataset,
-        batch_size=train_cfg["batch_size"],
-        shuffle=True,
-        num_workers=train_cfg.get("num_workers", 2),
-        pin_memory=True,
-        persistent_workers=True if train_cfg.get("num_workers", 0) > 0 else False
-    )
+    model = ResNetUNet(pretrained=train_cfg.get("pretrained_encoder", True), attention=args.attention).to(device)
+    if accelerator_cfg.get("compile_model", False) and device.type == "cuda" and hasattr(torch, "compile"):
+        try:
+            print("Compiling model for CUDA training...")
+            model = torch.compile(model)
+        except Exception as error:
+            print(f"Model compilation skipped: {error}")
 
-    val_loader = DataLoader(
-        val_dataset,
-        batch_size=train_cfg["batch_size"],
-        shuffle=False,
-        num_workers=train_cfg.get("num_workers", 2),
-        pin_memory=True,
-        persistent_workers=True if train_cfg.get("num_workers", 0) > 0 else False
-    )
-
-    # -------- MODEL --------
-    model = ResNetUNet().to(device)
-    
-    # -------- GRAPH OPTIMIZATION (Disabled for Windows) --------
-    # if hasattr(torch, "compile") and device == "cuda":
-    #     try:
-    #         print("🚀 Compiling model for speed...")
-    #         model = torch.compile(model)
-    #     except Exception as e:
-    #         print(f"⚠️ Could not compile model: {e}")
-
-    # -------- LOSS --------
-    # Added Label Smoothing for better generalization
-    criterion = BCEDiceLoss(
-        bce_weight=loss_cfg.get("bce_weight", 0.5),
-        label_smoothing=loss_cfg.get("label_smoothing", 0.1)
-    )
-
-    # -------- OPTIMIZER --------
-    optimizer = optim.AdamW(
-        model.parameters(),
-        lr=train_cfg["learning_rate"],
-        weight_decay=1e-2 # Added weight decay (standard for AdamW)
-    )
-    
-    # -------- SCHEDULER --------
-    # Using OneCycleLR for faster convergence and super-convergence
-    epochs = train_cfg["epochs"]
-    scheduler = optim.lr_scheduler.OneCycleLR(
-        optimizer,
-        max_lr=train_cfg["learning_rate"] * 10,
-        steps_per_epoch=len(train_loader),
-        epochs=epochs,
-        pct_start=0.3,
-        anneal_strategy='cos'
-    )
-
+    if args.loss == "focal-dice":
+        criterion = FocalDiceLoss(focal_weight=loss_cfg.get("focal_weight", 0.5),
+                                  gamma=loss_cfg.get("focal_gamma", 2.0), alpha=loss_cfg.get("focal_alpha", 0.75))
+    else:
+        criterion = BCEDiceLoss(bce_weight=loss_cfg.get("bce_weight", 0.5), label_smoothing=loss_cfg.get("label_smoothing", 0.1))
+    optimizer = optim.AdamW(model.parameters(), lr=train_cfg["learning_rate"], weight_decay=1e-2)
+    epochs = args.epochs if args.epochs is not None else train_cfg["epochs"]
+    scheduler = optim.lr_scheduler.OneCycleLR(optimizer, max_lr=train_cfg["learning_rate"] * 10,
+                                              steps_per_epoch=len(train_loader), epochs=epochs,
+                                              pct_start=0.3, anneal_strategy="cos")
+    logs = {key: [] for key in ("train_loss", "val_loss", "val_iou", "val_f1", "val_precision", "val_recall", "val_accuracy", "val_auc")}
     best_val_loss = float("inf")
-    log_data = {
-        "train_loss": [], 
-        "val_loss": [], 
-        "val_iou": [], 
-        "val_f1": [], 
-        "val_precision": [], 
-        "val_recall": [], 
-        "val_accuracy": [],
-        "val_auc": []
-    }
 
     for epoch in range(epochs):
-        print(f"\nEpoch {epoch+1}/{epochs}")
-
-        # train_one_epoch must call scheduler.step() per iteration for OneCycleLR
-        train_loss = train_one_epoch(
-            model, train_loader, optimizer, criterion, device, scheduler=scheduler
-        )
-
-        val_loss, val_metrics = validate(
-            model, val_loader, criterion, device
-        )
-        
-        # scheduler.step() is handled inside the training loop for OneCycleLR
-
-        print(
-            f"Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f}\n"
-            f"IoU: {val_metrics['iou']:.4f} | F1: {val_metrics['f1']:.4f} | "
-            f"AUC: {val_metrics['auc']:.4f} | Acc: {val_metrics['accuracy']:.4f} | "
-            f"Prec: {val_metrics['precision']:.4f} | Rec: {val_metrics['recall']:.4f}"
-        )
-
+        print(f"\nEpoch {epoch + 1}/{epochs}")
+        train_loss = train_one_epoch(model, train_loader, optimizer, criterion, device, scheduler, precision)
+        val_loss, metrics = validate(model, val_loader, criterion, device, precision)
+        print(f"Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f} | IoU: {metrics['iou']:.4f} | F1: {metrics['f1']:.4f}")
         if val_loss < best_val_loss:
             best_val_loss = val_loss
-            torch.save(
-                model.state_dict(),
-                os.path.join(OUTPUT_DIR, "best_model.pth")
-            )
-            print("✔ Best model saved")
-
-        log_data["train_loss"].append(train_loss)
-        log_data["val_loss"].append(val_loss)
-        log_data["val_iou"].append(val_metrics["iou"])
-        log_data["val_f1"].append(val_metrics["f1"])
-        log_data["val_precision"].append(val_metrics["precision"])
-        log_data["val_recall"].append(val_metrics["recall"])
-        log_data["val_accuracy"].append(val_metrics["accuracy"])
-        log_data["val_auc"].append(val_metrics["auc"])
-
-        with open(os.path.join(OUTPUT_DIR, "log.json"), "w") as f:
-            json.dump(log_data, f, indent=4)
+            state_owner = model._orig_mod if hasattr(model, "_orig_mod") else model
+            torch.save(state_owner.state_dict(), best_path)
+            print("Best model saved")
+        logs["train_loss"].append(train_loss)
+        logs["val_loss"].append(val_loss)
+        for name, value in metrics.items():
+            logs.setdefault(f"val_{name}", []).append(value)
+        with open(os.path.join(output_dir, "log.json"), "w", encoding="utf-8") as file:
+            json.dump(logs, file, indent=2)
+        save_training_plots(os.path.join(output_dir, "log.json"))
 
 
 if __name__ == "__main__":

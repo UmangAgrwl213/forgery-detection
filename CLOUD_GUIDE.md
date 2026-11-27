@@ -24,7 +24,7 @@ with open('configs/config.yaml', 'r') as f:
 config['paths']['tp_dir'] = config['paths']['colab_tp']
 config['paths']['gt_dir'] = config['paths']['colab_gt']
 config['training']['batch_size'] = config['training']['cloud_batch_size']
-config['training']['subset_train'] = -1 # Train on ALL images
+config['training']['subset_train'] = -1 # Use all matched pairs, split 80/20
 config['training']['subset_val'] = -1
 
 with open('configs/config.yaml', 'w') as f:

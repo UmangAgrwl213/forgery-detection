@@ -7,23 +7,15 @@ import torch
 import numpy as np
 import matplotlib.pyplot as plt
 from models.resnet_unet import ResNetUNet
-from datasets.transforms import get_val_transforms
+from data.transforms import get_val_transforms
 from utils.config import load_yaml_config
 from utils.metrics import calculate_metrics
 
 def load_model(path, device):
     if not os.path.exists(path):
         raise FileNotFoundError(f"No model found at {path}")
-    model = ResNetUNet().to(device)
-    # Handle possible torch.compile prefix
-    state_dict = torch.load(path, map_location=device, weights_only=True)
-    new_state_dict = {}
-    for k, v in state_dict.items():
-        if k.startswith('_orig_mod.'):
-            new_state_dict[k[10:]] = v
-        else:
-            new_state_dict[k] = v
-    model.load_state_dict(new_state_dict)
+    state_dict = torch.load(path, map_location="cpu", weights_only=True)
+    model = ResNetUNet.from_state_dict(state_dict).to(device)
     model.eval()
     return model
 

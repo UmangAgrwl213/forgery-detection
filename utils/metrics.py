@@ -5,7 +5,7 @@ import numpy as np
 from sklearn.metrics import roc_auc_score
 
 
-def calculate_metrics(logits, targets, threshold=0.5, eps=1e-6):
+def calculate_metrics(logits, targets, threshold=0.5, eps=1e-6, compute_auc=True):
     """
     Calculate comprehensive pixel-wise performance metrics, including AUC.
     """
@@ -35,13 +35,13 @@ def calculate_metrics(logits, targets, threshold=0.5, eps=1e-6):
     iou = (intersection + eps) / (union + eps)
 
     # AUC Calculation (only if both classes are present in targets)
-    try:
-        if len(np.unique(targets_flat)) > 1:
-            auc = roc_auc_score(targets_flat, probs_flat)
-        else:
-            auc = 0.5 # Default for single class
-    except Exception:
-        auc = 0.5
+    auc = 0.5
+    if compute_auc:
+        try:
+            if len(np.unique(targets_flat)) > 1:
+                auc = roc_auc_score(targets_flat, probs_flat)
+        except Exception:
+            pass
 
     return {
         "iou": float(iou),

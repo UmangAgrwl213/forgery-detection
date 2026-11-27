@@ -2,6 +2,7 @@
 
 import torch
 import torch.nn as nn
+from torch.nn import functional as F
 
 
 class DiceLoss(nn.Module):
@@ -43,3 +44,22 @@ class BCEDiceLoss(nn.Module):
         dice_loss = self.dice(logits, targets)
 
         return self.bce_weight * bce_loss + (1 - self.bce_weight) * dice_loss
+
+
+class FocalDiceLoss(nn.Module):
+    def __init__(self, focal_weight=0.5, gamma=2.0, alpha=0.75):
+        super().__init__()
+        if not 0 <= focal_weight <= 1 or not 0 < alpha < 1 or not 0 <= gamma < float("inf"):
+            raise ValueError("Expected focal weight in [0, 1], alpha in (0, 1), and finite nonnegative gamma")
+        self.focal_weight = focal_weight
+        self.gamma = gamma
+        self.alpha = alpha
+        self.dice = DiceLoss()
+
+    def forward(self, logits, targets):
+        logits, targets = logits.float(), targets.float()
+        bce = F.binary_cross_entropy_with_logits(logits, targets, reduction="none")
+        error_probability = (-torch.expm1(-bce)).clamp_min(torch.finfo(bce.dtype).tiny)
+        class_weight = self.alpha * targets + (1 - self.alpha) * (1 - targets)
+        focal = (class_weight * error_probability.pow(self.gamma) * bce).mean()
+        return self.focal_weight * focal + (1 - self.focal_weight) * self.dice(logits, targets)

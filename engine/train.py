@@ -4,11 +4,12 @@ import torch
 from tqdm import tqdm
 
 
-def train_one_epoch(model, loader, optimizer, criterion, device, scheduler=None):
+def train_one_epoch(model, loader, optimizer, criterion, device, scheduler=None, autocast_dtype=torch.float16):
     model.train()
 
     total_loss = 0.0
-    scaler = torch.amp.GradScaler('cuda') # Mixed Precision
+    use_amp = device.type == "cuda"
+    scaler = torch.amp.GradScaler("cuda", enabled=use_amp)
 
     pbar = tqdm(loader, desc="Training", leave=False)
 
@@ -17,7 +18,7 @@ def train_one_epoch(model, loader, optimizer, criterion, device, scheduler=None)
         masks = masks.to(device, non_blocking=True)
 
         # Forward with Mixed Precision
-        with torch.amp.autocast('cuda'):
+        with torch.amp.autocast(device_type=device.type, dtype=autocast_dtype, enabled=use_amp):
             outputs = model(images)
             loss = criterion(outputs, masks)
 
